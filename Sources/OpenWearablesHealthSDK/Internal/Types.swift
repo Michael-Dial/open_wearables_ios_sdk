@@ -40,6 +40,10 @@ public enum HealthDataType: String, CaseIterable, Sendable {
     case walkingHeartRateAverage
     /// Heart rate drop one minute after a workout ends (iOS 16+).
     case heartRateRecoveryOneMinute
+    /// Apple Watch beat-to-beat series (the optical tachogram behind each HRV reading).
+    /// Not synced with the other types: the backend decides per participant which series
+    /// to upload (off / sleep / all day, plus requested windows). See `BeatCapture.swift`.
+    case heartbeatSeries
     
     // Body Measurements
     case bodyMass
@@ -159,6 +163,8 @@ public enum HealthDataType: String, CaseIterable, Sendable {
                 return HKObjectType.quantityType(forIdentifier: .heartRateRecoveryOneMinute)
             }
             return nil
+        case .heartbeatSeries:
+            return HKSeriesType.heartbeat()
         case .bodyMass:
             return HKObjectType.quantityType(forIdentifier: .bodyMass)
         case .height:
@@ -916,7 +922,7 @@ extension OpenWearablesHealthSDK {
     
     // MARK: - Source mapper (unified format)
     
-    private func _mapSource(_ sourceRevision: HKSourceRevision, device: HKDevice?) -> [String: Any] {
+    internal func _mapSource(_ sourceRevision: HKSourceRevision, device: HKDevice?) -> [String: Any] {
         var result: [String: Any] = [
             "appId": sourceRevision.source.bundleIdentifier,
             "name": sourceRevision.source.name,
@@ -967,7 +973,7 @@ extension OpenWearablesHealthSDK {
     
     // MARK: - Zone Offset
     
-    private func _zoneOffsetString(metadata: [String: Any]?, fallback: [String: Any]? = nil, date: Date) -> Any {
+    internal func _zoneOffsetString(metadata: [String: Any]?, fallback: [String: Any]? = nil, date: Date) -> Any {
         if let tzName = metadata?[HKMetadataKeyTimeZone] as? String,
            let tz = TimeZone(identifier: tzName) {
             return _formatZoneOffset(tz.secondsFromGMT(for: date))
