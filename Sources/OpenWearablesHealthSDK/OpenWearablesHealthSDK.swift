@@ -493,6 +493,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         resetAllAnchors()
         clearSyncSession()
         clearOutbox()
+        clearBeatCaptureState()
         OpenWearablesHealthSdkKeychain.clearAll()
         
         logMessage("Sign out complete - all sync state reset")
@@ -704,7 +705,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             return
         }
         
-        let readTypes = Set(getQueryableTypes())
+        let readTypes = Set(getAuthorizationTypes())
         logMessage("Requesting read-only auth for \(readTypes.count) types")
         
         healthStore.requestAuthorization(toShare: nil, read: readTypes) { ok, _ in
@@ -716,14 +717,16 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         return authCredential
     }
     
+    /// Types HealthKit is asked to authorize. A correlation type cannot be requested.
+    internal func getAuthorizationTypes() -> [HKSampleType] {
+        trackedTypes.filter { $0.identifier != HKCorrelationTypeIdentifier.bloodPressure.rawValue }
+    }
+    
+    /// Types the regular sync loop fetches. Heartbeat series are authorized but read by the
+    /// beat pass instead (`runBeatCapture`): each one needs its own per-beat query, and the
+    /// backend decides which to upload.
     internal func getQueryableTypes() -> [HKSampleType] {
-        let disallowedIdentifiers: Set<String> = [
-            HKCorrelationTypeIdentifier.bloodPressure.rawValue
-        ]
-        
-        return trackedTypes.filter { type in
-            !disallowedIdentifiers.contains(type.identifier)
-        }
+        getAuthorizationTypes().filter { $0.identifier != BeatCapture.heartbeatTypeIdentifier }
     }
 
     // MARK: - Internal: Sync
@@ -866,14 +869,20 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                     }
                 }
                 
+                let finish: () -> Void = {
+                    self.fullSyncStartTime = nil
+                    self.finishSync(generation: generation)
+                    completion()
+                }
                 if allTypesCompleted {
                     self.finalizeSyncState()
+                    // Beats go after everything else, inside the same run so nothing else
+                    // can start while HealthKit is being read series by series.
+                    self.runBeatCapture(generation: generation, isBackground: isBackground, completion: finish)
                 } else {
                     self.logMessage("Sync incomplete - will resume remaining types later")
+                    finish()
                 }
-                self.fullSyncStartTime = nil
-                self.finishSync(generation: generation)
-                completion()
             }
         }
         
@@ -1417,7 +1426,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
     /// background, or `nil` when it is active (foreground has no time limit).
     /// UIApplication state must be read on the main thread; sync uploads complete
     /// on the main queue, so guard against deadlocking with `Thread.isMainThread`.
-    private func backgroundTimeRemainingIfInBackground() -> TimeInterval? {
+    internal func backgroundTimeRemainingIfInBackground() -> TimeInterval? {
         let read: () -> TimeInterval? = {
             guard UIApplication.shared.applicationState == .background else { return nil }
             return UIApplication.shared.backgroundTimeRemaining

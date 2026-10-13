@@ -1,0 +1,52 @@
+name: OpenWearablesHealthSDK
+options:
+  bundleIdPrefix: com.openwearables
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+
+targets:
+  OpenWearablesHealthSDK:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Sources/OpenWearablesHealthSDK
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.openwearables.healthsdk
+    dependencies:
+      - sdk: HealthKit.framework
+      - sdk: BackgroundTasks.framework
+      - sdk: UIKit.framework
+      - sdk: Network.framework
+
+  OpenWearablesHealthSDKTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/OpenWearablesHealthSDKTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.openwearables.healthsdk.tests
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_TESTABILITY: YES
+    dependencies:
+      - target: OpenWearablesHealthSDK
+      - sdk: HealthKit.framework
+
+schemes:
+  OpenWearablesHealthSDK:
+    build:
+      targets:
+        OpenWearablesHealthSDK: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - OpenWearablesHealthSDKTests
