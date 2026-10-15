@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-* **HRV RMSSD**: authorize and sync `heartRateVariabilityRMSSD` (iOS 27+) as a quantity sample in milliseconds, next to the existing `heartRateVariabilitySDNN`. HealthKit reports it as `HKQuantityTypeIdentifierHeartRateVariabilityRMSSD`. The type is compiled only with the iOS 27 SDK (Xcode 27), so the package still builds with older Xcode versions; there, and on devices below iOS 27, `toHKSampleType()` returns `nil` and the type is skipped during authorization and sync.
+* **HRV RMSSD**: authorize and sync `heartRateVariabilityRMSSD` (iOS 27+) as a quantity sample in milliseconds, next to the existing `heartRateVariabilitySDNN`. HealthKit reports it as `HKQuantityTypeIdentifierHeartRateVariabilityRMSSD`. The type is compiled only with the iOS 27 SDK (Xcode 27), so the package still builds with older Xcode versions; there, and on devices below iOS 27, `toHKSampleType()` returns `nil` and the type is skipped during authorization and sync. Requires an Open Wearables backend that maps this type (the-momentum/open-wearables#1750). Older backends accept the upload but silently drop RMSSD samples, and because the SDK advances its anchor they are not resent after the backend is upgraded unless `resetAnchors()` is called.
 
 ## 0.15.0
 
