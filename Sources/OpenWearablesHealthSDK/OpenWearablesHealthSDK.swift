@@ -322,8 +322,12 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
     
     private override init() {
         super.init()
-        // Fresh BGTask processes never see `configure` before the first refresh.
+        // Fresh BGTask processes never see `configure` before the first refresh,
+        // and without tracked types their sync finds nothing to query.
         self.host = OpenWearablesHealthSdkKeychain.getHost()
+        if let storedTypes = OpenWearablesHealthSdkKeychain.getTrackedTypes() {
+            self.trackedTypes = mapTypesFromStrings(storedTypes)
+        }
         
         let bgCfg = URLSessionConfiguration.background(withIdentifier: bgSessionId)
         bgCfg.isDiscretionary = false
@@ -403,6 +407,29 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         }
     }
     
+    // MARK: - Public API: Launch Restore
+
+    /// Re-registers HealthKit observers for an active sync without waiting for `configure`.
+    ///
+    /// Call from `application(_:didFinishLaunchingWithOptions:)`. HealthKit wakes the app in
+    /// the background to deliver new samples, but delivers them only to observer queries the
+    /// process has running. A host that calls `configure` from a UI layer (Flutter, React
+    /// Native) never does so on a background launch when the UI starts with a scene, which a
+    /// background launch never connects: the wake finds no observers, nothing syncs, and the
+    /// data waits until the user opens the app. Safe to call before `configure`; `configure`
+    /// afterwards does not register the observers twice.
+    public func restoreBackgroundSyncAtLaunch() {
+        OpenWearablesHealthSdkKeychain.clearKeychainIfReinstalled()
+        if let storedTypes = OpenWearablesHealthSdkKeychain.getTrackedTypes() {
+            self.trackedTypes = mapTypesFromStrings(storedTypes)
+        }
+        guard OpenWearablesHealthSdkKeychain.isSyncActive(),
+              OpenWearablesHealthSdkKeychain.hasSession(),
+              !trackedTypes.isEmpty else { return }
+        logMessage("Restoring background sync at launch...")
+        autoRestoreSync()
+    }
+
     // MARK: - Public API: Authentication
     
     /// Sign in with user credentials. Provide either (accessToken + refreshToken) or apiKey.
@@ -676,6 +703,12 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             return
         }
         
+        // Launch restore and `configure` both land here; register once per process.
+        guard activeObserverQueries.isEmpty else {
+            logMessage("Background sync already restored")
+            return
+        }
+        
         startBackgroundDelivery()
         startNetworkMonitoring()
         startProtectedDataMonitoring()
@@ -683,15 +716,13 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         scheduleAppRefresh()
         scheduleProcessing()
         
-        // Resume when there is a session with progress, but also when the initial
-        // full export never completed (e.g. it was interrupted before its first
-        // successful upload - such a session has no progress to detect).
-        let fullDone = defaults.bool(forKey: fullDoneKey())
-        if hasResumableSyncSession() || !fullDone {
-            logMessage("Found interrupted sync, will resume...")
-            syncAll(fullExport: false) {
-                self.logMessage("Resumed sync completed")
-            }
+        // Catch up on whatever arrived while no observer was running. Observers fire
+        // only for new samples, so without this a missed delivery waits for the next
+        // one. Also resumes an interrupted session and finishes an initial full export
+        // that never completed (`collectAllData` escalates to it).
+        logMessage("Catching up on samples since the last sync...")
+        syncAll(fullExport: false) {
+            self.logMessage("Catch-up sync completed")
         }
         
         logMessage("Background sync auto-restored")
