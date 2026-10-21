@@ -235,6 +235,8 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
     
     // Foreground monitoring (resume sync when app returns to foreground)
     private var foregroundObserver: NSObjectProtocol?
+    /// When coming to the foreground last started an incremental sync.
+    private var lastForegroundSyncAt: Date?
 
     // Per-user state (anchors)
     internal let defaults = UserDefaults(suiteName: "com.openwearables.healthsdk.state") ?? .standard
@@ -1869,23 +1871,40 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         }
     }
     
+    /// Coming to the foreground resumes an interrupted sync, and otherwise picks up
+    /// what HealthKit gained while the app was away (at most every
+    /// `foregroundSyncInterval`). Reopening a suspended app used to sync nothing unless
+    /// a run had been interrupted: its observers were already registered, so the launch
+    /// catch-up never ran, and new data waited for a delivery, a BGTask, or a manual
+    /// stop and start of sync.
     private func tryResumeAfterForeground() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self = self else { return }
             
-            guard OpenWearablesHealthSdkKeychain.isSyncActive(), self.hasAuth else { return }
-            
             let fullDone = self.defaults.bool(forKey: self.fullDoneKey())
-            guard self.hasResumableSyncSession() || !fullDone else { return }
-            
-            guard !self.isSyncInProgress else {
-                self.logMessage("Sync already in progress after foreground")
+            let now = Date()
+            let action = OpenWearablesHealthSDK.foregroundSync(
+                syncActive: OpenWearablesHealthSdkKeychain.isSyncActive(),
+                hasAuth: self.hasAuth,
+                inProgress: self.isSyncInProgress,
+                resumable: self.hasResumableSyncSession() || !fullDone,
+                lastForegroundSyncAt: self.lastForegroundSyncAt,
+                now: now
+            )
+            switch action {
+            case .skip:
                 return
-            }
-            
-            self.logMessage("App returned to foreground - resuming sync...")
-            self.syncAll(fullExport: false) {
-                self.logMessage("Foreground resume sync completed")
+            case .resume:
+                self.logMessage("App returned to foreground - resuming sync...")
+                self.syncAll(fullExport: false) {
+                    self.logMessage("Foreground resume sync completed")
+                }
+            case .incremental:
+                self.lastForegroundSyncAt = now
+                self.logMessage("App returned to foreground - syncing new data...")
+                self.syncAll(fullExport: false) {
+                    self.logMessage("Foreground sync completed")
+                }
             }
         }
     }
