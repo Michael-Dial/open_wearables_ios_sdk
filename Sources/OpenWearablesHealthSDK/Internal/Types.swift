@@ -355,13 +355,17 @@ extension OpenWearablesHealthSDK {
     /// handed to `JSONSerialization` in one piece, so peak memory scales with the round.
     /// It is bounded by the round size instead - background rounds carry 100 records
     /// (~65 KB), and the 2000-record rounds only run in the foreground.
-    internal func buildCombinedPayload(samples: [HKSample]) -> [String: Any] {
+    ///
+    /// `knownFoodChildIds` are dietary samples that belong to a food correlation outside
+    /// this round (see `fetchFoodChildIds`). They are skipped here because the food
+    /// query sends them with `parentId`, in this round or another one.
+    internal func buildCombinedPayload(samples: [HKSample], knownFoodChildIds: Set<UUID> = []) -> [String: Any] {
         var workouts: [[String: Any]] = []
         var records: [[String: Any]] = []
         var sleep: [[String: Any]] = []
-        
+
         let dateFormatter = ISO8601DateFormatter()
-        let foodChildIds = _foodChildIds(in: samples)
+        let foodChildIds = _foodChildIds(in: samples).union(knownFoodChildIds)
         
         let batchSize = 100
         for batchStart in stride(from: 0, to: samples.count, by: batchSize) {
@@ -373,7 +377,7 @@ extension OpenWearablesHealthSDK {
                     if let w = s as? HKWorkout {
                         workouts.append(_mapWorkoutEfficient(w, dateFormatter: dateFormatter))
                     } else if let q = s as? HKQuantitySample {
-                        // Already emitted as a child of HKCorrelationTypeFood in this round.
+                        // Sent as a child of HKCorrelationTypeFood (this round or another).
                         if foodChildIds.contains(q.uuid) { continue }
                         records.append(_mapQuantityEfficient(q, dateFormatter: dateFormatter))
                     } else if let c = s as? HKCategorySample {
@@ -437,7 +441,8 @@ extension OpenWearablesHealthSDK {
     
     /// Legacy mapping from raw strings - used for restoring persisted types from Keychain.
     internal func mapTypesFromStrings(_ names: [String]) -> [HKSampleType] {
-        return names.compactMap { HealthDataType(rawValue: $0)?.toHKSampleType() }
+        // Go through mapTypes so restored dietary types bring the food correlation back too.
+        return mapTypes(names.compactMap { HealthDataType(rawValue: $0) })
     }
 
     // MARK: - Units / helpers

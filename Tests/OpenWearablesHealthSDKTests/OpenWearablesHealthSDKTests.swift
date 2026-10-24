@@ -202,6 +202,41 @@ final class OpenWearablesHealthSDKTests: XCTestCase {
         XCTAssertEqual(list.filter { $0["id"] as? String == energy.uuid.uuidString }.count, 1)
     }
 
+    func testRestoredTypesStillQueryFoodCorrelation() {
+        // configure() restores tracked types from the raw values saved by requestAuthorization.
+        let restored = OpenWearablesHealthSDK.shared.mapTypesFromStrings(["dietaryProtein", "steps"])
+        XCTAssertTrue(restored.contains { $0.identifier == HKCorrelationTypeIdentifier.food.rawValue })
+        XCTAssertTrue(restored.contains { $0.identifier == HKQuantityTypeIdentifier.dietaryProtein.rawValue })
+    }
+
+    func testDietarySampleOfFoodFromAnotherRoundIsNotSentLoose() {
+        let start = Date(timeIntervalSince1970: 1_779_163_200)
+        let protein = HKQuantitySample(
+            type: HKQuantityType.quantityType(forIdentifier: .dietaryProtein)!,
+            quantity: HKQuantity(unit: .gram(), doubleValue: 38.2),
+            start: start,
+            end: start
+        )
+        let caffeine = HKQuantitySample(
+            type: HKQuantityType.quantityType(forIdentifier: .dietaryCaffeine)!,
+            quantity: HKQuantity(unit: HKUnit.gramUnit(with: .milli), doubleValue: 95),
+            start: start,
+            end: start
+        )
+
+        // Protein belongs to a food correlation that the food query sends in another round.
+        let payload = OpenWearablesHealthSDK.shared.buildCombinedPayload(
+            samples: [protein, caffeine],
+            knownFoodChildIds: [protein.uuid]
+        )
+        let list = (payload["data"] as? [String: Any])?["records"] as? [[String: Any]] ?? []
+
+        XCTAssertFalse(list.contains { $0["id"] as? String == protein.uuid.uuidString })
+        let caffeineRow = list.first { $0["id"] as? String == caffeine.uuid.uuidString }
+        XCTAssertNotNil(caffeineRow)
+        XCTAssertTrue(caffeineRow?["parentId"] is NSNull)
+    }
+
     func testCyclingTypesMapToHealthKit() {
         XCTAssertEqual(HealthDataType.cyclingPower.rawValue, "cyclingPower")
         XCTAssertEqual(HealthDataType.cyclingCadence.rawValue, "cyclingCadence")
