@@ -704,7 +704,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             return
         }
         
-        let readTypes = Set(getQueryableTypes())
+        let readTypes = Set(typesForAuthorization())
         logMessage("Requesting read-only auth for \(readTypes.count) types")
         
         healthStore.requestAuthorization(toShare: nil, read: readTypes) { ok, _ in
@@ -717,12 +717,27 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
     }
     
     internal func getQueryableTypes() -> [HKSampleType] {
+        // Blood pressure is synced from the systolic and diastolic samples.
+        // Food stays here: the correlation is queried for the parent meal, but
+        // HealthKit refuses it in requestAuthorization (see typesForAuthorization).
         let disallowedIdentifiers: Set<String> = [
             HKCorrelationTypeIdentifier.bloodPressure.rawValue
         ]
         
         return trackedTypes.filter { type in
             !disallowedIdentifiers.contains(type.identifier)
+        }
+    }
+
+    /// Types safe to pass to `HKHealthStore.requestAuthorization`.
+    ///
+    /// `HKCorrelationTypeIdentifierFood` (and blood pressure, already dropped by
+    /// `getQueryableTypes`) cannot be authorized directly. HealthKit throws
+    /// `NSInvalidArgumentException` if they are in the read set. Read access to a
+    /// food correlation comes from the dietary quantity types it contains.
+    internal func typesForAuthorization() -> [HKSampleType] {
+        getQueryableTypes().filter { type in
+            type.identifier != HKCorrelationTypeIdentifier.food.rawValue
         }
     }
 
@@ -1069,55 +1084,118 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                 return
             }
             
-            let payload = self.buildCombinedPayload(samples: allSamples)
-            
-            self.uploadCombinedPayload(
-                payload: payload, endpoint: endpoint, credential: freshCredential,
-                generation: rrState.generation
-            ) { [weak self] sendSuccess in
+            self.fetchFoodChildIds(forLooseDietaryIn: allSamples) { [weak self] knownFoodChildIds in
                 guard let self = self else { completion(false); return }
-                if !sendSuccess { completion(false); return }
                 if self.isSyncCancelled(generation: rrState.generation) {
                     completion(false)
                     return
                 }
-                
-                // Phase 3: Update progress for all types that had data
-                for result in withData {
-                    if fullExport {
-                        self.updateTypeProgress(
-                            typeIdentifier: result.type.identifier, sentInChunk: result.count,
-                            isComplete: false, anchorData: nil, olderThan: result.nextOlderThan
-                        )
-                    } else {
-                        self.updateTypeProgress(
-                            typeIdentifier: result.type.identifier, sentInChunk: result.count,
-                            isComplete: result.isDone, anchorData: result.anchorData
-                        )
-                        if result.isDone {
-                            rrState.completedTypes.insert(result.type.identifier)
+
+                let payload = self.buildCombinedPayload(samples: allSamples, knownFoodChildIds: knownFoodChildIds)
+
+                self.uploadCombinedPayload(
+                    payload: payload, endpoint: endpoint, credential: freshCredential,
+                    generation: rrState.generation
+                ) { [weak self] sendSuccess in
+                    guard let self = self else { completion(false); return }
+                    if !sendSuccess { completion(false); return }
+                    if self.isSyncCancelled(generation: rrState.generation) {
+                        completion(false)
+                        return
+                    }
+
+                    // Phase 3: Update progress for all types that had data
+                    for result in withData {
+                        if fullExport {
+                            self.updateTypeProgress(
+                                typeIdentifier: result.type.identifier, sentInChunk: result.count,
+                                isComplete: false, anchorData: nil, olderThan: result.nextOlderThan
+                            )
+                        } else {
+                            self.updateTypeProgress(
+                                typeIdentifier: result.type.identifier, sentInChunk: result.count,
+                                isComplete: result.isDone, anchorData: result.anchorData
+                            )
+                            if result.isDone {
+                                rrState.completedTypes.insert(result.type.identifier)
+                            }
                         }
                     }
-                }
-                
-                // Phase 4: For full export, capture anchors for done types
-                let fullExportDone = withData.filter { $0.isDone }.map { $0.type } + doneTypesForAnchorCapture.filter { t in !withData.contains(where: { $0.type == t }) }
-                if fullExport && !fullExportDone.isEmpty {
-                    self.captureAnchorsForDoneTypes(types: fullExportDone, index: 0, rrState: rrState) { captureOk in
-                        guard captureOk else { completion(false); return }
+
+                    // Phase 4: For full export, capture anchors for done types
+                    let fullExportDone = withData.filter { $0.isDone }.map { $0.type } + doneTypesForAnchorCapture.filter { t in !withData.contains(where: { $0.type == t }) }
+                    if fullExport && !fullExportDone.isEmpty {
+                        self.captureAnchorsForDoneTypes(types: fullExportDone, index: 0, rrState: rrState) { captureOk in
+                            guard captureOk else { completion(false); return }
+                            self.processNextRound(
+                                types: types, fullExport: fullExport, endpoint: endpoint,
+                                rrState: rrState, completion: completion
+                            )
+                        }
+                    } else {
                         self.processNextRound(
                             types: types, fullExport: fullExport, endpoint: endpoint,
                             rrState: rrState, completion: completion
                         )
                     }
-                } else {
-                    self.processNextRound(
-                        types: types, fullExport: fullExport, endpoint: endpoint,
-                        rrState: rrState, completion: completion
-                    )
                 }
             }
         }
+    }
+
+    // MARK: - Food parents of loose dietary samples
+
+    /// Each type has its own cursor, so a dietary sample can come in a round where its
+    /// food correlation does not (the food query returned it in another round). Look up
+    /// the food correlations around such samples so the payload leaves them to the food
+    /// query instead of also sending them as loose samples with no `parentId`.
+    /// Returns an empty set when there is nothing to check or the lookup fails - the
+    /// samples then go out loose, as before.
+    private func fetchFoodChildIds(
+        forLooseDietaryIn samples: [HKSample],
+        completion: @escaping (Set<UUID>) -> Void
+    ) {
+        // Without the food type tracked, nothing else would ever send these samples.
+        guard let foodType = HKObjectType.correlationType(forIdentifier: .food),
+              trackedTypes.contains(where: { $0.identifier == foodType.identifier }) else {
+            completion([])
+            return
+        }
+
+        let childIdsInRound = Set(samples
+            .compactMap { $0 as? HKCorrelation }
+            .filter { $0.correlationType.identifier == foodType.identifier }
+            .flatMap { $0.objects.map { $0.uuid } })
+        let looseDietary = samples
+            .compactMap { $0 as? HKQuantitySample }
+            .filter { $0.quantityType.identifier.hasPrefix("HKQuantityTypeIdentifierDietary") && !childIdsInRound.contains($0.uuid) }
+        guard let start = looseDietary.map({ $0.startDate }).min(),
+              let end = looseDietary.map({ $0.endDate }).max() else {
+            completion([])
+            return
+        }
+
+        // Children normally share the food's dates; the margin catches ones that don't.
+        let margin: TimeInterval = 24 * 60 * 60
+        let predicate = HKQuery.predicateForSamples(
+            withStart: start.addingTimeInterval(-margin), end: end.addingTimeInterval(margin), options: []
+        )
+        let query = HKCorrelationQuery(type: foodType, predicate: predicate, samplePredicates: nil) {
+            [weak self] _, correlations, error in
+            if let error = error {
+                self?.logMessage("food: parent lookup for \(looseDietary.count) dietary samples failed - \(error.localizedDescription)")
+                completion([])
+                return
+            }
+            var ids = Set<UUID>()
+            for correlation in correlations ?? [] {
+                for object in correlation.objects {
+                    ids.insert(object.uuid)
+                }
+            }
+            completion(ids)
+        }
+        healthStore.execute(query)
     }
     
     // MARK: - Fetch all types in a round (no network, accumulates results)
