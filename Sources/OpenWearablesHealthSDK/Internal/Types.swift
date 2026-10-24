@@ -536,7 +536,7 @@ extension OpenWearablesHealthSDK {
             }
             if #available(iOS 16.0, *) {
                 if qt == HKObjectType.quantityType(forIdentifier: .heartRateRecoveryOneMinute) {
-                    return .count()
+                    return .count().unitDivided(by: .minute())
                 }
                 if qt == HKObjectType.quantityType(forIdentifier: .runningPower) {
                     return .watt()
@@ -642,9 +642,10 @@ extension OpenWearablesHealthSDK {
             }
             if #available(iOS 16.0, *) {
                 if qt == HKObjectType.quantityType(forIdentifier: .heartRateRecoveryOneMinute) {
-                    // HealthKit stores the drop as a discrete count; Health and the rest of
-                    // our heart types expose that as bpm (peak HR minus HR at +1 min).
-                    return (.count(), "bpm")
+                    // The drop is stored as count/min (Apple's docs say "count", but HealthKit
+                    // rejects .count() for this type and converting to it throws). Sent as bpm
+                    // like the other heart types (peak HR minus HR at +1 min).
+                    return (.count().unitDivided(by: .minute()), "bpm")
                 }
                 if qt == HKObjectType.quantityType(forIdentifier: .runningPower) {
                     return (.watt(), "W")
