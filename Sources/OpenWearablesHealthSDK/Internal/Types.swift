@@ -31,6 +31,7 @@ public enum HealthDataType: String, CaseIterable, Sendable {
     case restingHeartRate
     case heartRateVariabilitySDNN
     case heartRateVariabilityRMSSD // iOS 27.0+
+    case heartRateRecoveryOneMinute
     case vo2Max
     case oxygenSaturation
     case respiratoryRate
@@ -165,6 +166,11 @@ public enum HealthDataType: String, CaseIterable, Sendable {
                 return HKObjectType.quantityType(forIdentifier: .heartRateVariabilityRMSSD)
             }
             #endif
+            return nil
+        case .heartRateRecoveryOneMinute:
+            if #available(iOS 16.0, *) {
+                return HKObjectType.quantityType(forIdentifier: .heartRateRecoveryOneMinute)
+            }
             return nil
         case .vo2Max:
             return HKObjectType.quantityType(forIdentifier: .vo2Max)
@@ -529,6 +535,9 @@ extension OpenWearablesHealthSDK {
                 return unit
             }
             if #available(iOS 16.0, *) {
+                if qt == HKObjectType.quantityType(forIdentifier: .heartRateRecoveryOneMinute) {
+                    return .count().unitDivided(by: .minute())
+                }
                 if qt == HKObjectType.quantityType(forIdentifier: .runningPower) {
                     return .watt()
                 }
@@ -632,6 +641,12 @@ extension OpenWearablesHealthSDK {
                 return dietary
             }
             if #available(iOS 16.0, *) {
+                if qt == HKObjectType.quantityType(forIdentifier: .heartRateRecoveryOneMinute) {
+                    // The drop is stored as count/min (Apple's docs say "count", but HealthKit
+                    // rejects .count() for this type and converting to it throws). Sent as bpm
+                    // like the other heart types (peak HR minus HR at +1 min).
+                    return (.count().unitDivided(by: .minute()), "bpm")
+                }
                 if qt == HKObjectType.quantityType(forIdentifier: .runningPower) {
                     return (.watt(), "W")
                 }

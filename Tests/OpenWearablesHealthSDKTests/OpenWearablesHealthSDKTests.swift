@@ -280,6 +280,43 @@ final class OpenWearablesHealthSDKTests: XCTestCase {
         #endif
     }
 
+    func testHeartRateRecoveryMapsToHealthKit() {
+        XCTAssertEqual(HealthDataType.heartRateRecoveryOneMinute.rawValue, "heartRateRecoveryOneMinute")
+
+        if #available(iOS 16.0, *) {
+            XCTAssertEqual(
+                HealthDataType.heartRateRecoveryOneMinute.toHKSampleType()?.identifier,
+                HKQuantityTypeIdentifier.heartRateRecoveryOneMinute.rawValue
+            )
+        }
+    }
+
+    func testHeartRateRecoverySampleIsSentInBpm() throws {
+        guard #available(iOS 16.0, *) else { throw XCTSkip("heartRateRecoveryOneMinute needs iOS 16") }
+        let type = HKQuantityType.quantityType(forIdentifier: .heartRateRecoveryOneMinute)!
+        let perMinute = HKUnit.count().unitDivided(by: .minute())
+        // HealthKit only accepts count/min for this type, so this is what Apple Watch writes.
+        XCTAssertTrue(type.is(compatibleWith: perMinute))
+        XCTAssertFalse(type.is(compatibleWith: .count()))
+
+        let start = Date(timeIntervalSince1970: 1_779_163_200)
+        let sample = HKQuantitySample(
+            type: type,
+            quantity: HKQuantity(unit: perMinute, doubleValue: 25),
+            start: start,
+            end: start
+        )
+
+        // Converting this sample to .count() used to throw NSInvalidArgumentException.
+        let payload = OpenWearablesHealthSDK.shared.buildCombinedPayload(samples: [sample])
+        let records = (payload["data"] as? [String: Any])?["records"] as? [[String: Any]] ?? []
+
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?["type"] as? String, HKQuantityTypeIdentifier.heartRateRecoveryOneMinute.rawValue)
+        XCTAssertEqual(records.first?["value"] as? Double, 25)
+        XCTAssertEqual(records.first?["unit"] as? String, "bpm")
+    }
+
     func testRunningDynamicsTypesMapToHealthKit() {
         XCTAssertEqual(HealthDataType.runningPower.rawValue, "runningPower")
         XCTAssertEqual(HealthDataType.runningVerticalOscillation.rawValue, "runningVerticalOscillation")
