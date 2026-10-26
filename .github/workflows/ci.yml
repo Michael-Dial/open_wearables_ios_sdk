@@ -16,7 +16,7 @@ permissions:
 jobs:
   build:
     name: Build (iOS device)
-    runs-on: [self-hosted, macOS]
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,7 @@ jobs:
 
   test:
     name: Test (iOS Simulator)
-    runs-on: [self-hosted, macOS]
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
