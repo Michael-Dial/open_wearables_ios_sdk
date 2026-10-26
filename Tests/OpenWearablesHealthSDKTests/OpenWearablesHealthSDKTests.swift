@@ -266,18 +266,32 @@ final class OpenWearablesHealthSDKTests: XCTestCase {
     func testHeartRateVariabilityRMSSDMapsToHealthKit() {
         XCTAssertEqual(HealthDataType.heartRateVariabilityRMSSD.rawValue, "heartRateVariabilityRMSSD")
 
-        #if compiler(>=6.4)
+        // No `#if compiler` branch: the type must resolve on iOS 27 whatever Xcode built
+        // the SDK. A build that drops it fails here instead of shipping without RMSSD.
         if #available(iOS 27.0, *) {
             XCTAssertEqual(
                 HealthDataType.heartRateVariabilityRMSSD.toHKSampleType()?.identifier,
-                HKQuantityTypeIdentifier.heartRateVariabilityRMSSD.rawValue
+                "HKQuantityTypeIdentifierHeartRateVariabilityRMSSD"
             )
         } else {
             XCTAssertNil(HealthDataType.heartRateVariabilityRMSSD.toHKSampleType())
         }
-        #else
-        XCTAssertNil(HealthDataType.heartRateVariabilityRMSSD.toHKSampleType())
+    }
+
+    func testHeartRateVariabilityRMSSDIdentifierMatchesHealthKit() {
+        #if compiler(>=6.4)
+        // Where the SDK symbol exists, the raw spelling must be the same identifier.
+        if #available(iOS 27.0, *) {
+            XCTAssertEqual(
+                HKQuantityTypeIdentifier.owHeartRateVariabilityRMSSD.rawValue,
+                HKQuantityTypeIdentifier.heartRateVariabilityRMSSD.rawValue
+            )
+        }
         #endif
+        XCTAssertEqual(
+            HKQuantityTypeIdentifier.owHeartRateVariabilityRMSSD.rawValue,
+            "HKQuantityTypeIdentifierHeartRateVariabilityRMSSD"
+        )
     }
 
     func testAppleSleepingWristTemperatureMapsToHealthKit() {
