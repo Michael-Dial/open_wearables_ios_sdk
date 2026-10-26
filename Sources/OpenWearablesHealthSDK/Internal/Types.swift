@@ -177,13 +177,12 @@ public enum HealthDataType: String, CaseIterable, Sendable {
         case .heartRateVariabilitySDNN:
             return HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN)
         case .heartRateVariabilityRMSSD:
-            // The identifier only exists in the iOS 27 SDK, so older Xcode versions
-            // compile this type out instead of failing the build.
-            #if compiler(>=6.4)
+            // Spelled as its raw value (see `owHeartRateVariabilityRMSSD`), never behind
+            // `#if compiler`: compiling the type out on an older Xcode drops RMSSD from
+            // the build with no error while SDNN keeps syncing.
             if #available(iOS 27.0, *) {
-                return HKObjectType.quantityType(forIdentifier: .heartRateVariabilityRMSSD)
+                return HKObjectType.quantityType(forIdentifier: .owHeartRateVariabilityRMSSD)
             }
-            #endif
             return nil
         case .heartRateRecoveryOneMinute:
             if #available(iOS 16.0, *) {
@@ -618,13 +617,11 @@ extension OpenWearablesHealthSDK {
                     return .appleEffortScore()
                 }
             }
-            #if compiler(>=6.4)
             if #available(iOS 27.0, *) {
-                if qt == HKObjectType.quantityType(forIdentifier: .heartRateVariabilityRMSSD) {
+                if qt == HKObjectType.quantityType(forIdentifier: .owHeartRateVariabilityRMSSD) {
                     return .secondUnit(with: .milli)
                 }
             }
-            #endif
             return .count()
         }
     }
@@ -743,13 +740,11 @@ extension OpenWearablesHealthSDK {
                     return (.count(), "count")
                 }
             }
-            #if compiler(>=6.4)
             if #available(iOS 27.0, *) {
-                if qt == HKObjectType.quantityType(forIdentifier: .heartRateVariabilityRMSSD) {
+                if qt == HKObjectType.quantityType(forIdentifier: .owHeartRateVariabilityRMSSD) {
                     return (.secondUnit(with: .milli), "ms")
                 }
             }
-            #endif
             return (.count(), "count")
         }
     }
@@ -1244,4 +1239,15 @@ extension OpenWearablesHealthSDK {
         default: return "unknown"
         }
     }
+}
+
+extension HKQuantityTypeIdentifier {
+    /// `.heartRateVariabilityRMSSD` (iOS 27.0+), spelled as its raw value so the SDK
+    /// builds with any Xcode. The SDK's own symbol exists only from the iOS 27 SDK, and
+    /// putting it behind `#if compiler(>=6.4)` compiled RMSSD out of every app built
+    /// with an older Xcode: the type was never authorized or read, and nothing failed.
+    /// The `#available(iOS 27.0, *)` checks at each use still keep it off older iOS.
+    static let owHeartRateVariabilityRMSSD = HKQuantityTypeIdentifier(
+        rawValue: "HKQuantityTypeIdentifierHeartRateVariabilityRMSSD"
+    )
 }
