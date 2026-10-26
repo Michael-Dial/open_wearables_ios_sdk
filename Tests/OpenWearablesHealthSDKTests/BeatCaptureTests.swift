@@ -171,7 +171,7 @@ final class BeatCaptureTests: XCTestCase {
 
         XCTAssertTrue(sdk.isBeatCaptureTracked)
         XCTAssertEqual(
-            Set(sdk.getAuthorizationTypes().map(\.identifier)),
+            Set(sdk.typesForAuthorization().map(\.identifier)),
             [HKQuantityTypeIdentifier.heartRate.rawValue, HKDataTypeIdentifierHeartbeatSeries]
         )
         XCTAssertEqual(sdk.getQueryableTypes().map(\.identifier), [HKQuantityTypeIdentifier.heartRate.rawValue])
