@@ -128,7 +128,8 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         method: String = "POST",
         credential: String?,
         requestId: String,
-        outboxItemId: String? = nil
+        outboxItemId: String? = nil,
+        syncContext: SyncRequestContext? = nil
     ) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -139,6 +140,10 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         request.setValue(requestId, forHTTPHeaderField: "X-Request-Id")
         if let outboxItemId = outboxItemId {
             request.setValue(outboxItemId, forHTTPHeaderField: "X-Open-Wearables-Outbox-Item")
+        }
+        if let syncContext = syncContext {
+            request.setValue(syncContext.appState, forHTTPHeaderField: "X-Open-Wearables-App-State")
+            request.setValue(syncContext.trigger.rawValue, forHTTPHeaderField: "X-Open-Wearables-Sync-Trigger")
         }
         if let credential = credential {
             applyAuth(to: &request, credential: credential)
@@ -664,7 +669,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             return
         }
         
-        syncAll(fullExport: false) {
+        syncAll(fullExport: false, trigger: .resume) {
             completion(true)
         }
     }
@@ -678,7 +683,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         
         if OpenWearablesHealthSdkKeychain.isSyncActive() && self.hasAuth {
             logMessage("Triggering full export after reset...")
-            self.syncAll(fullExport: true) {
+            self.syncAll(fullExport: true, trigger: .reset) {
                 self.logMessage("Full export after reset completed")
             }
         }
@@ -723,7 +728,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         // one. Also resumes an interrupted session and finishes an initial full export
         // that never completed (`collectAllData` escalates to it).
         logMessage("Catching up on samples since the last sync...")
-        syncAll(fullExport: false) {
+        syncAll(fullExport: false, trigger: .restore) {
             self.logMessage("Catch-up sync completed")
         }
         
@@ -785,15 +790,15 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
 
     // MARK: - Internal: Sync
     
-    internal func syncAll(fullExport: Bool, completion: @escaping () -> Void) {
+    internal func syncAll(fullExport: Bool, trigger: SyncTrigger, completion: @escaping () -> Void) {
         guard !trackedTypes.isEmpty else { completion(); return }
-        
+
         guard self.hasAuth else {
             self.logMessage("No auth credential for sync")
             completion()
             return
         }
-        self.collectAllData(fullExport: fullExport, completion: completion)
+        self.collectAllData(fullExport: fullExport, isBackground: false, trigger: trigger, completion: completion)
     }
     
     internal func triggerCombinedSync() {
@@ -815,7 +820,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            self.syncAll(fullExport: false) {
+            self.syncAll(fullExport: false, trigger: .healthKitObserver) {
                 if self.observerBgTask != .invalid {
                     UIApplication.shared.endBackgroundTask(self.observerBgTask)
                     self.observerBgTask = .invalid
@@ -827,11 +832,12 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         syncDebounceQueue.asyncAfter(deadline: .now() + 2.0, execute: workItem)
     }
     
-    internal func collectAllData(fullExport: Bool, completion: @escaping () -> Void) {
-        collectAllData(fullExport: fullExport, isBackground: false, completion: completion)
-    }
-    
-    internal func collectAllData(fullExport: Bool, isBackground: Bool, completion: @escaping () -> Void) {
+    internal func collectAllData(
+        fullExport: Bool,
+        isBackground: Bool,
+        trigger: SyncTrigger,
+        completion: @escaping () -> Void
+    ) {
         guard let generation = beginSyncRun() else {
             logMessage("Sync in progress, skipping")
             completion()
@@ -905,6 +911,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                 fullExport: effectiveFullExport,
                 endpoint: endpoint,
                 isBackground: isBackground,
+                trigger: trigger,
                 generation: generation
             ) { [weak self] allTypesCompleted in
                 guard let self = self else { return }
@@ -969,10 +976,13 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         let generation: Int
         /// Whether the caller already knows it runs in the background (BG tasks do).
         let declaredBackground: Bool
-        
-        init(generation: Int, declaredBackground: Bool) {
+        /// What started this run; sent with every upload.
+        let trigger: SyncTrigger
+
+        init(generation: Int, declaredBackground: Bool, trigger: SyncTrigger) {
             self.generation = generation
             self.declaredBackground = declaredBackground
+            self.trigger = trigger
         }
     }
     
@@ -992,10 +1002,11 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         fullExport: Bool,
         endpoint: URL,
         isBackground: Bool,
+        trigger: SyncTrigger,
         generation: Int,
         completion: @escaping (Bool) -> Void
     ) {
-        let rrState = RoundRobinState(generation: generation, declaredBackground: isBackground)
+        let rrState = RoundRobinState(generation: generation, declaredBackground: isBackground, trigger: trigger)
         
         let resumeInfo = getResumeCursors()
         rrState.completedTypes = resumeInfo.completedTypes
@@ -1140,10 +1151,16 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                 }
 
                 let payload = self.buildCombinedPayload(samples: allSamples, knownFoodChildIds: knownFoodChildIds)
+                // The actual app state, not `declaredBackground`: observer and resume
+                // syncs are declared foreground but usually run while suspended.
+                let syncContext = SyncRequestContext(
+                    inBackground: self.backgroundTimeRemainingIfInBackground() != nil,
+                    trigger: rrState.trigger
+                )
 
                 self.uploadCombinedPayload(
                     payload: payload, endpoint: endpoint, credential: freshCredential,
-                    generation: rrState.generation
+                    generation: rrState.generation, syncContext: syncContext
                 ) { [weak self] sendSuccess in
                     guard let self = self else { completion(false); return }
                     if !sendSuccess { completion(false); return }
@@ -1910,7 +1927,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                         return
                     }
                     
-                    self.syncAll(fullExport: false) {
+                    self.syncAll(fullExport: false, trigger: .unlock) {
                         self.logMessage("Deferred sync after unlock completed")
                     }
                 }
@@ -1980,13 +1997,13 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                 return
             case .resume:
                 self.logMessage("App returned to foreground - resuming sync...")
-                self.syncAll(fullExport: false) {
+                self.syncAll(fullExport: false, trigger: .foreground) {
                     self.logMessage("Foreground resume sync completed")
                 }
             case .incremental:
                 self.lastForegroundSyncAt = now
                 self.logMessage("App returned to foreground - syncing new data...")
-                self.syncAll(fullExport: false) {
+                self.syncAll(fullExport: false, trigger: .foreground) {
                     self.logMessage("Foreground sync completed")
                 }
             }
@@ -2017,7 +2034,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             }
             
             self.logMessage("Resuming sync after network restored...")
-            self.syncAll(fullExport: false) {
+            self.syncAll(fullExport: false, trigger: .network) {
                 self.logMessage("Network resume sync completed")
             }
         }
