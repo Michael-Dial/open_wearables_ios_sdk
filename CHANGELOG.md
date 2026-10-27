@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+* **Sync attribution headers**: every `/sync` upload now carries `X-Open-Wearables-App-State` (`foreground` / `background`, read from `UIApplication` when the batch is built) and `X-Open-Wearables-Sync-Trigger` (what started the run: `healthkit_observer`, `bg_app_refresh`, `bg_processing`, `start`, `restore`, `resume`, `reset`, `foreground`, `unlock`, `network`). A 401 retry repeats the values of the attempt it replays. Open Wearables logs them as `app_state` and `sync_trigger` from the-momentum/open-wearables#1980; older servers ignore them.
+
 ## 0.16.0
 
 * **Heart rate recovery**: authorize and sync `heartRateRecoveryOneMinute` (iOS 16+) as a quantity sample — the same path as `heartRate` / `vo2Max`. Value is the one-minute post-workout HR drop in `bpm`. Apple Watch writes these after a recorded workout; they are not derived from raw heart-rate samples.

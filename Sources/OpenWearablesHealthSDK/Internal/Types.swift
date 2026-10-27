@@ -1177,3 +1177,37 @@ extension OpenWearablesHealthSDK {
         }
     }
 }
+
+// MARK: - Sync Attribution
+
+/// What started a sync run. Sent with every upload as `X-Open-Wearables-Sync-Trigger`,
+/// so server logs can tell HealthKit wake-ups from BGTasks and app launches.
+internal enum SyncTrigger: String {
+    /// `startBackgroundSync()` - first export or the incremental sync right after it.
+    case start
+    /// Interrupted sync resumed when a saved session is restored on launch.
+    case restore
+    /// `resumeSync()` called by the app.
+    case resume
+    /// Full export started by `resetAnchors()`.
+    case reset
+    /// HealthKit background delivery woke the app.
+    case healthKitObserver = "healthkit_observer"
+    case appRefresh = "bg_app_refresh"
+    case processing = "bg_processing"
+    /// Interrupted sync resumed when the app returned to the foreground.
+    case foreground
+    /// Deferred sync resumed after the device was unlocked.
+    case unlock
+    /// Sync resumed after the network came back.
+    case network
+}
+
+/// Sync attribution sent as headers on an upload. Captured when the batch is built,
+/// so a 401 retry reports the same state as the original attempt.
+internal struct SyncRequestContext {
+    let inBackground: Bool
+    let trigger: SyncTrigger
+
+    var appState: String { inBackground ? "background" : "foreground" }
+}
