@@ -875,7 +875,8 @@ extension OpenWearablesHealthSDK {
             finalUnit = fallbackUnit.unitString
         }
 
-        if q.quantityType.identifier == HKQuantityTypeIdentifier.oxygenSaturation.rawValue {
+        // HKUnit.percent() is a 0-1 fraction; "%" is sent on a 0-100 scale.
+        if finalUnit == "%" {
             value *= 100
         }
 
@@ -1139,7 +1140,7 @@ extension OpenWearablesHealthSDK {
         if let swimmingLocationType = w.metadata?[HKMetadataKeySwimmingLocationType] as? NSNumber { stats.append(["type": "swimmingLocationType", "value": swimmingLocationType.intValue, "unit": "enum"]) }
         if let indoorWorkout = w.metadata?[HKMetadataKeyIndoorWorkout] as? Bool { stats.append(["type": "indoorWorkout", "value": indoorWorkout ? 1 : 0, "unit": "bool"]) }
         if let weatherTemp = w.metadata?[HKMetadataKeyWeatherTemperature] as? HKQuantity { stats.append(["type": "weatherTemperature", "value": weatherTemp.doubleValue(for: .degreeCelsius()), "unit": "degC"]) }
-        if let weatherHumidity = w.metadata?[HKMetadataKeyWeatherHumidity] as? HKQuantity { stats.append(["type": "weatherHumidity", "value": weatherHumidity.doubleValue(for: .percent()), "unit": "%"]) }
+        if let weatherHumidity = w.metadata?[HKMetadataKeyWeatherHumidity] as? HKQuantity { stats.append(["type": "weatherHumidity", "value": weatherHumidity.doubleValue(for: .percent()) * 100, "unit": "%"]) }
         
         return stats
     }
