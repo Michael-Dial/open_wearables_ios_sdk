@@ -3,7 +3,14 @@
 ## Unreleased
 
 * **Sync attribution headers**: every `/sync` upload now carries `X-Open-Wearables-App-State` (`foreground` / `background`, read from `UIApplication` when the batch is built) and `X-Open-Wearables-Sync-Trigger` (what started the run: `healthkit_observer`, `bg_app_refresh`, `bg_processing`, `start`, `restore`, `resume`, `reset`, `foreground`, `unlock`, `network`). A 401 retry repeats the values of the attempt it replays. Open Wearables logs them as `app_state` and `sync_trigger` from the-momentum/open-wearables#1980; older servers ignore them.
-* **Percentages on a 0-100 scale** (breaking for older backends): every value sent with unit `"%"` is now on a 0-100 scale, like the Android SDK. `HKUnit.percent()` returns a 0-1 fraction, and until now only `oxygenSaturation` was scaled, so `bodyFatPercentage` (`0.304` → `30.4`), `walkingAsymmetryPercentage`, `walkingDoubleSupportPercentage` and the workout `weatherHumidity` statistic were sent as fractions. **Requires Open Wearables 0.11.0 or later. Upgrade the backend before shipping an app with this SDK version.** Older backends multiply Apple body fat and walking percentages by 100 again and store body fat as `3040`. Newer backends keep scaling payloads from older SDK versions, so apps that have not upgraded stay correct.
+* **Percentages on a 0-100 scale**: every value sent with unit `"%"` is now on a 0-100 scale, the same as the Android SDK. `HKUnit.percent()` returns a 0-1 fraction, and until now only `oxygenSaturation` was scaled, so the payload was inconsistent: SpO2 went out as `97`, but `bodyFatPercentage` as `0.304`, both labelled `"%"`. `walkingAsymmetryPercentage`, `walkingDoubleSupportPercentage` and the workout `weatherHumidity` statistic were also sent as fractions.
+
+  > [!WARNING]
+  > **Requires Open Wearables 0.11.0 or later** (the-momentum/open-wearables#<PR>). Upgrade the Open Wearables backend **before** releasing an app built with this SDK version.
+  >
+  > Open Wearables 0.10.0 and older multiply Apple body fat and walking percentages by 100 again, so body fat `30.4` is stored as `3040`. Data stored that way is not corrected by a later backend upgrade.
+  >
+  > Open Wearables 0.11.0 and later keep converting payloads from older SDK versions, so apps that have not upgraded the SDK stay correct.
 
 ## 0.16.0
 
