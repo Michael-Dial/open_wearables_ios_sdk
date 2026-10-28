@@ -20,7 +20,10 @@ jobs:
   # Build and test share one macOS job so each commit waits for a single runner.
   build-and-test:
     name: Build and test (iOS)
-    runs-on: macos-15
+    # The org's self-hosted Mac. The repo is public, so pull requests from forks never
+    # run here: their code would execute on that machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
