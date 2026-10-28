@@ -34,6 +34,8 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      # Each run builds into its own DerivedData and tests on its own simulator, so two
+      # runners on the same Mac never share a build folder or boot the same device.
       - name: Build framework for iOS (device SDK)
         run: |
           xcodebuild build \
@@ -41,14 +43,18 @@ jobs:
             -scheme OpenWearablesHealthSDK \
             -configuration Debug \
             -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Pick newest iPhone simulator
+      - name: Create a simulator for this run
         run: |
-          DEVICE=$(xcrun simctl list devices available -j \
-            | jq -r '.devices | to_entries[] | .value[] | select(.isAvailable) | .name' \
-            | grep -i iphone | tail -1)
-          echo "SIM_DEVICE=$DEVICE" >> "$GITHUB_ENV"
+          RUNTIMES=$(xcrun simctl list runtimes available -j)
+          RUNTIME=$(echo "$RUNTIMES" | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] | last | .identifier')
+          DEVICE_TYPE=$(echo "$RUNTIMES" | jq -r --arg r "$RUNTIME" \
+            '.runtimes[] | select(.identifier == $r) | [.supportedDeviceTypes[] | select(.productFamily == "iPhone")] | last | .identifier')
+          SIM_UDID=$(xcrun simctl create "ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" "$DEVICE_TYPE" "$RUNTIME")
+          echo "Created $SIM_UDID ($DEVICE_TYPE, $RUNTIME)"
+          echo "SIM_UDID=$SIM_UDID" >> "$GITHUB_ENV"
 
       - name: Run unit tests
         run: |
@@ -56,5 +62,12 @@ jobs:
             -project OpenWearablesHealthSDK.xcodeproj \
             -scheme OpenWearablesHealthSDK \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=$SIM_DEVICE" \
+            -destination "id=$SIM_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Delete this run's simulator
+        if: always() && env.SIM_UDID != ''
+        run: |
+          xcrun simctl shutdown "$SIM_UDID" || true
+          xcrun simctl delete "$SIM_UDID"
