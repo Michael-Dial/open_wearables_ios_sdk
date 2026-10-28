@@ -6,7 +6,7 @@
 * **Percentages on a 0-100 scale**: every value sent with unit `"%"` is now on a 0-100 scale, the same as the Android SDK. `HKUnit.percent()` returns a 0-1 fraction, and until now only `oxygenSaturation` was scaled, so the payload was inconsistent: SpO2 went out as `97`, but `bodyFatPercentage` as `0.304`, both labelled `"%"`. `walkingAsymmetryPercentage`, `walkingDoubleSupportPercentage` and the workout `weatherHumidity` statistic were also sent as fractions.
 
   > [!WARNING]
-  > **Requires Open Wearables 0.11.0 or later** (the-momentum/open-wearables#<PR>). Upgrade the Open Wearables backend **before** releasing an app built with this SDK version.
+  > **Requires Open Wearables 0.11.0 or later** (the-momentum/open-wearables#1986). Upgrade the Open Wearables backend **before** releasing an app built with this SDK version.
   >
   > Open Wearables 0.10.0 and older multiply Apple body fat and walking percentages by 100 again, so body fat `30.4` is stored as `3040`. Data stored that way is not corrected by a later backend upgrade.
   >
