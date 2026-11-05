@@ -1209,6 +1209,15 @@ extension OpenWearablesHealthSDK {
 
         if let hw = device?.hardwareVersion { result["deviceHardwareVersion"] = hw }
         if let sw = device?.softwareVersion { result["deviceSoftwareVersion"] = sw }
+        // The rest of HKDevice and the writer's version. None of these identify the source
+        // (Open Wearables keys it on appId and model); they date what produced each record,
+        // so a firmware or app update partway through a study is visible beside its data.
+        // localIdentifier is scoped to this HealthKit store and changes on restore or
+        // re-pair, so the backend records it as evidence and never as an identity.
+        if let fw = device?.firmwareVersion { result["deviceFirmwareVersion"] = fw }
+        if let local = device?.localIdentifier { result["deviceLocalIdentifier"] = local }
+        if let udi = device?.udiDeviceIdentifier { result["deviceUdiDeviceIdentifier"] = udi }
+        if let version = sourceRevision.version { result["version"] = version }
 
         let osVersion = sourceRevision.operatingSystemVersion
         result["operatingSystemVersion"] = [
