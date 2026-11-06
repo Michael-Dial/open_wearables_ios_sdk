@@ -463,16 +463,16 @@ final class OpenWearablesHealthSDKTests: XCTestCase {
             metadata[HKMetadataKeySWOLFScore] = NSNumber(value: 88)
         }
         let length = HKWorkoutEvent(type: .lap, dateInterval: DateInterval(start: start, duration: 62), metadata: metadata)
-        let kick = HKWorkoutEvent(
+        let backstroke = HKWorkoutEvent(
             type: .lap,
             dateInterval: DateInterval(start: start.addingTimeInterval(90), duration: 70),
-            metadata: [HKMetadataKeySwimmingStrokeStyle: NSNumber(value: HKSwimmingStrokeStyle.kickboard.rawValue)]
+            metadata: [HKMetadataKeySwimmingStrokeStyle: NSNumber(value: HKSwimmingStrokeStyle.backstroke.rawValue)]
         )
         let workout = HKWorkout(
             activityType: .swimming,
             start: start,
             end: start.addingTimeInterval(180),
-            workoutEvents: [length, kick],
+            workoutEvents: [length, backstroke],
             totalEnergyBurned: nil,
             totalDistance: nil,
             metadata: nil
@@ -490,7 +490,7 @@ final class OpenWearablesHealthSDKTests: XCTestCase {
         if #available(iOS 16.0, *) {
             XCTAssertEqual(rows[0]["swolf"] as? Double, 88)
         }
-        XCTAssertEqual(rows[1]["strokeStyle"] as? String, "kickboard")
+        XCTAssertEqual(rows[1]["strokeStyle"] as? String, "backstroke")
         XCTAssertNil(rows[1]["swolf"])
     }
 
@@ -498,6 +498,13 @@ final class OpenWearablesHealthSDKTests: XCTestCase {
         let sdk = OpenWearablesHealthSDK.shared
         XCTAssertEqual(sdk._swimmingStrokeStyleString(NSNumber(value: 2)), "freestyle")
         XCTAssertNil(sdk._swimmingStrokeStyleString(NSNumber(value: 99)))
+        // `.kickboard` is iOS 16+; the test target deploys to iOS 15.
+        if #available(iOS 16.0, *) {
+            XCTAssertEqual(
+                sdk._swimmingStrokeStyleString(NSNumber(value: HKSwimmingStrokeStyle.kickboard.rawValue)),
+                "kickboard"
+            )
+        }
         XCTAssertNil(sdk._swimmingStrokeStyleString("2"))
         XCTAssertEqual(sdk._swolfScore(HKQuantity(unit: .count(), doubleValue: 41)), 41)
         XCTAssertNil(sdk._swolfScore(HKQuantity(unit: .meter(), doubleValue: 41)))
