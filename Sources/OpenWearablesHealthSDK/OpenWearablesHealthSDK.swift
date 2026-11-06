@@ -237,7 +237,16 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
     
     // Protected data monitoring
     private var protectedDataObserver: NSObjectProtocol?
-    internal var pendingSyncAfterUnlock = false
+    private static let pendingSyncAfterUnlockKey = "pendingSyncAfterUnlock"
+
+    /// Set when HealthKit refused a read because the device was locked. Persisted, because
+    /// the unlock notification only reaches a process that is still running, and after a
+    /// night of the phone being locked iOS has usually suspended or killed it. A later
+    /// foreground, relaunch or background task reads the flag instead.
+    internal var pendingSyncAfterUnlock: Bool {
+        get { defaults.bool(forKey: Self.pendingSyncAfterUnlockKey) }
+        set { defaults.set(newValue, forKey: Self.pendingSyncAfterUnlockKey) }
+    }
     
     // Foreground monitoring (resume sync when app returns to foreground)
     private var foregroundObserver: NSObjectProtocol?
@@ -824,6 +833,13 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.syncAll(fullExport: false, trigger: .healthKitObserver) {
+                // The ~30s background assertion ran out before every type was sent (a night
+                // of samples rarely fits). Ask for a processing task, which can run for
+                // minutes, instead of waiting for the next HealthKit write or app open.
+                if self.loadSyncState() != nil {
+                    self.logMessage("Observer sync incomplete - scheduling processing task to finish it")
+                    self.scheduleProcessing()
+                }
                 if self.observerBgTask != .invalid {
                     UIApplication.shared.endBackgroundTask(self.observerBgTask)
                     self.observerBgTask = .invalid
@@ -846,6 +862,10 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             completion()
             return
         }
+
+        // This run covers whatever a locked device held back. If the device is still
+        // locked, the first HealthKit read fails and sets the flag again.
+        pendingSyncAfterUnlock = false
         
         guard HKHealthStore.isHealthDataAvailable() else {
             logMessage("HealthKit not available")
@@ -1530,7 +1550,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                 if let error = error {
                     if self.isProtectedDataError(error) {
                         self.logMessage("\(self.shortTypeName(type.identifier)): protected data inaccessible - pausing sync")
-                        self.pendingSyncAfterUnlock = true
+                        self.deferSyncUntilUnlock()
                         completion(false, [], nil, false)
                         return
                     }
@@ -1577,7 +1597,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                 if let error = error {
                     if self.isProtectedDataError(error) {
                         self.logMessage("\(self.shortTypeName(type.identifier)): protected data inaccessible - pausing sync")
-                        self.pendingSyncAfterUnlock = true
+                        self.deferSyncUntilUnlock()
                         completion(false, [], nil, nil, false)
                         return
                     }
@@ -1633,7 +1653,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                 // persist it and the next incremental sync would re-crawl history.
                 if self.isProtectedDataError(error) {
                     self.logMessage("\(self.shortTypeName(type.identifier)): protected data inaccessible during anchor capture - will retry after unlock")
-                    self.pendingSyncAfterUnlock = true
+                    self.deferSyncUntilUnlock()
                 } else {
                     self.logMessage("\(self.shortTypeName(type.identifier)): anchor capture failed - \(error.localizedDescription)")
                 }
@@ -1714,6 +1734,16 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             guard UIApplication.shared.applicationState == .background else { return nil }
             return UIApplication.shared.backgroundTimeRemaining
         }
+        if Thread.isMainThread {
+            return read()
+        }
+        return DispatchQueue.main.sync(execute: read)
+    }
+
+    /// Whether HealthKit can be read right now (`false` while the device is locked).
+    /// Read on the main thread for the same reason as `backgroundTimeRemainingIfInBackground`.
+    internal func isProtectedDataAvailableNow() -> Bool {
+        let read: () -> Bool = { UIApplication.shared.isProtectedDataAvailable }
         if Thread.isMainThread {
             return read()
         }
@@ -2086,6 +2116,17 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         logMessage("Protected data monitoring started")
     }
     
+    /// Called when HealthKit refuses a read because the device is locked. Besides the
+    /// unlock notification, asks iOS again for both background tasks, so a task that runs
+    /// after the unlock picks the data up even if this process is gone by then.
+    internal func deferSyncUntilUnlock() {
+        let wasPending = pendingSyncAfterUnlock
+        pendingSyncAfterUnlock = true
+        guard !wasPending else { return }
+        scheduleAppRefresh()
+        scheduleProcessing()
+    }
+    
     internal func stopProtectedDataMonitoring() {
         if let observer = protectedDataObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -2137,7 +2178,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                 syncActive: OpenWearablesHealthSdkKeychain.isSyncActive(),
                 hasAuth: self.hasAuth,
                 inProgress: self.isSyncInProgress,
-                resumable: self.hasResumableSyncSession() || !fullDone,
+                resumable: self.hasResumableSyncSession() || !fullDone || self.pendingSyncAfterUnlock,
                 lastForegroundSyncAt: self.lastForegroundSyncAt,
                 now: now
             )

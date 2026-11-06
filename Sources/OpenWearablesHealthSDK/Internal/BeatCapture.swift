@@ -471,7 +471,7 @@ extension OpenWearablesHealthSDK {
             if let error = error {
                 if self?.isProtectedDataError(error) == true {
                     self?.logMessage("Beat capture: protected data inaccessible - pausing")
-                    self?.pendingSyncAfterUnlock = true
+                    self?.deferSyncUntilUnlock()
                 } else {
                     self?.logMessage("Beat capture: series query failed - \(error.localizedDescription)")
                 }
@@ -556,7 +556,7 @@ extension OpenWearablesHealthSDK {
             if let error = error {
                 if self.isProtectedDataError(error) {
                     self.logMessage("Beat capture: protected data inaccessible - pausing")
-                    self.pendingSyncAfterUnlock = true
+                    self.deferSyncUntilUnlock()
                     completion(false, records)
                     return
                 }
