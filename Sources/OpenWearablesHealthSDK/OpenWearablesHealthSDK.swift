@@ -163,7 +163,11 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
     // Debouncing
     private var pendingSyncWorkItem: DispatchWorkItem?
     private let syncDebounceQueue = DispatchQueue(label: "health_sync_debounce")
-    private var observerBgTask: UIBackgroundTaskIdentifier = .invalid
+    /// Covers only the debounce wait after a HealthKit delivery; the run it starts holds
+    /// its own. Read and written on `syncDebounceQueue` only.
+    private var debounceAssertion: BackgroundAssertion?
+    /// Begins and ends the background tasks a sync holds. Tests replace it.
+    internal var backgroundAssertions: BackgroundAssertionProvider = UIApplicationBackgroundAssertions()
     
     // Sync flags
     internal var isInitialSyncInProgress = false
@@ -818,37 +822,39 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             logMessage("Skipping - initial sync in progress")
             return
         }
-        
-        if observerBgTask == .invalid {
-            observerBgTask = UIApplication.shared.beginBackgroundTask(withName: "health_combined_sync") {
-                self.logMessage("Background task expired - cancelling in-flight uploads")
-                self.cancelInFlightSyncUploads(reason: "backgroundExpiration")
-                UIApplication.shared.endBackgroundTask(self.observerBgTask)
-                self.observerBgTask = .invalid
-            }
-        }
-        
-        pendingSyncWorkItem?.cancel()
-        
-        let workItem = DispatchWorkItem { [weak self] in
+
+        // HealthKit calls observers on its own queues, several at once when a watch syncs,
+        // so the debounce state lives on one serial queue.
+        syncDebounceQueue.async { [weak self] in
             guard let self = self else { return }
-            self.syncAll(fullExport: false, trigger: .healthKitObserver) {
-                // The ~30s background assertion ran out before every type was sent (a night
-                // of samples rarely fits). Ask for a processing task, which can run for
-                // minutes, instead of waiting for the next HealthKit write or app open.
-                if self.loadSyncState() != nil {
-                    self.logMessage("Observer sync incomplete - scheduling processing task to finish it")
-                    self.scheduleProcessing()
-                }
-                if self.observerBgTask != .invalid {
-                    UIApplication.shared.endBackgroundTask(self.observerBgTask)
-                    self.observerBgTask = .invalid
-                }
+            if self.debounceAssertion == nil {
+                self.debounceAssertion = BackgroundAssertion(
+                    name: "health_sync_debounce", provider: self.backgroundAssertions
+                )
             }
+
+            self.pendingSyncWorkItem?.cancel()
+
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                self.syncAll(fullExport: false, trigger: .healthKitObserver) {
+                    // Background time ran out before every type was sent (a night of
+                    // samples rarely fits). Ask for a processing task, which can run for
+                    // minutes, instead of waiting for the next HealthKit write or app open.
+                    if self.loadSyncState() != nil {
+                        self.logMessage("Observer sync incomplete - scheduling processing task to finish it")
+                        self.scheduleProcessing()
+                    }
+                }
+                // By now the run this delivery started holds its own assertion, or a run
+                // already in progress holds one. This one covered the wait and nothing else.
+                self.debounceAssertion?.end()
+                self.debounceAssertion = nil
+            }
+
+            self.pendingSyncWorkItem = workItem
+            self.syncDebounceQueue.asyncAfter(deadline: .now() + 2.0, execute: workItem)
         }
-        
-        pendingSyncWorkItem = workItem
-        syncDebounceQueue.asyncAfter(deadline: .now() + 2.0, execute: workItem)
     }
     
     internal func collectAllData(
@@ -863,6 +869,30 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             return
         }
 
+        // A run started outside a BGTask (a HealthKit delivery, launch restore, unlock,
+        // network return, foreground) holds its own background assertion until it ends,
+        // so the app is not suspended mid-run when it is, or goes, into the background.
+        // A BGTask keeps the process alive itself and has its own expiration handler.
+        let assertion: BackgroundAssertion? = isBackground ? nil : BackgroundAssertion(
+            name: "health_sync_run", provider: backgroundAssertions
+        ) { [weak self] in
+            self?.runOutOfBackgroundTime(generation: generation)
+        }
+        let endRun: () -> Void = {
+            assertion?.end()
+            completion()
+        }
+
+        if let assertion = assertion, !assertion.isValid, backgroundTimeRemainingIfInBackground() != nil {
+            // No background time left: the run would be suspended at its first await and
+            // hold the slot until the app next woke. Leave it to a processing task.
+            logMessage("No background time to sync in - leaving it to a processing task")
+            scheduleProcessing()
+            finishSync(generation: generation)
+            endRun()
+            return
+        }
+
         // This run covers whatever a locked device held back. If the device is still
         // locked, the first HealthKit read fails and sets the flag again.
         pendingSyncAfterUnlock = false
@@ -870,14 +900,14 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         guard HKHealthStore.isHealthDataAvailable() else {
             logMessage("HealthKit not available")
             finishSync(generation: generation)
-            completion()
+            endRun()
             return
         }
         
         guard self.authCredential != nil, let endpoint = self.syncEndpoint else {
             logMessage("No auth credential or endpoint")
             finishSync(generation: generation)
-            completion()
+            endRun()
             return
         }
         
@@ -885,7 +915,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         guard !queryableTypes.isEmpty else {
             logMessage("No queryable types")
             finishSync(generation: generation)
-            completion()
+            endRun()
             return
         }
         
@@ -956,7 +986,7 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
                 let finish: () -> Void = {
                     self.fullSyncStartTime = nil
                     self.finishSync(generation: generation)
-                    completion()
+                    endRun()
                 }
                 if allTypesCompleted {
                     self.finalizeSyncState()
@@ -1804,8 +1834,13 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
         isInitialSyncInProgress = false
         syncLock.unlock()
         
-        pendingSyncWorkItem?.cancel()
-        pendingSyncWorkItem = nil
+        syncDebounceQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.pendingSyncWorkItem?.cancel()
+            self.pendingSyncWorkItem = nil
+            self.debounceAssertion?.end()
+            self.debounceAssertion = nil
+        }
         
         // `isSyncing` stays set until the running loop reaches a checkpoint and unwinds
         // through `finishSync(generation:)`. Clearing it here would let a second sync
@@ -1819,12 +1854,26 @@ public final class OpenWearablesHealthSDK: NSObject, URLSessionDelegate, URLSess
             for task in tasks { task.cancel() }
         }
         
-        if observerBgTask != .invalid {
-            UIApplication.shared.endBackgroundTask(observerBgTask)
-            observerBgTask = .invalid
-        }
-        
         logMessage("Sync cancelled")
+    }
+    
+    /// A run's background assertion expired. iOS suspends the app as soon as this returns,
+    /// so stop the run here: left alive, it would resume on the next wake with no time of
+    /// its own and hold the slot that wake's run needs. `SyncState` only advances on a 2xx,
+    /// so the next run picks up where this one stopped.
+    internal func runOutOfBackgroundTime(generation: Int) {
+        logMessage("Background time ran out mid-sync - stopping the run; the next wake resumes it")
+        syncLock.lock()
+        if generation == syncGeneration {
+            cancelledGeneration = max(cancelledGeneration, generation)
+            // Starts the takeover clock in `beginSyncRun`, in case a HealthKit callback
+            // for this run never arrives after the suspension.
+            cancelRequestedAt = Date()
+            isInitialSyncInProgress = false
+        }
+        syncLock.unlock()
+        cancelInFlightSyncUploads(reason: "backgroundExpiration")
+        scheduleProcessing()
     }
     
     // MARK: - Logging
