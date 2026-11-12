@@ -28,6 +28,7 @@ extension XCTestCase {
         let previousCredentials = OpenWearablesHealthSdkKeychain.volatileStore
         let previousPersistedHost = OpenWearablesHealthSdkKeychain.getHost()
         let previousRefreshUrl = OpenWearablesHealthSdkKeychain.getCustomRefreshUrl()
+        let previousAssertions = sdk.backgroundAssertions
 
         let stateDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ow-sdk-tests-\(UUID().uuidString)", isDirectory: true)
@@ -38,6 +39,7 @@ extension XCTestCase {
 
         defer {
             StubURLProtocol.reset()
+            sdk.backgroundAssertions = previousAssertions
             sdk.onAuthError = previousAuthErrorHandler
             sdk.foregroundSession = previousSession
             sdk.stateDirectoryOverride = previousStateDirectory
@@ -49,6 +51,8 @@ extension XCTestCase {
         }
 
         sdk.stateDirectoryOverride = stateDirectory
+        // The test bundle has no host app, so there is no `UIApplication` to ask for time.
+        sdk.backgroundAssertions = FakeBackgroundAssertions()
         sdk.foregroundSession = URLSession(
             configuration: configuration, delegate: nil, delegateQueue: .main
         )
