@@ -1,14 +1,16 @@
 name: CI
 
 on:
+  # Push only on master; a branch is checked by its pull request. Running on pushes to
+  # claude/** as well started a push and a pull_request run for every commit on an open PR,
+  # and the concurrency group below then cancelled one of them, leaving a red "Cancelled"
+  # check on the PR (#16).
   push:
-    branches: [master, "claude/**"]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
-# One run per commit: a push to a branch with an open PR starts both a push and a
-# pull_request run, and hosted macOS runners are scarce enough that four queued
-# macOS jobs per commit left most of them cancelled before a runner picked them up.
+# One run per commit: a newer run for the same commit (a re-dispatch) cancels the older.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
